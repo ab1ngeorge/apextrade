@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { placeOrder,portfolio,cancelOrder } from '../src/lib/trading';
 import { db } from '../src/lib/db';
+import { seedDemo } from '../prisma/seed';
+import { compare, hash } from 'bcryptjs';
 const enabled=!!process.env.TEST_DATABASE_URL;
 let userId='',otherId='';
 function input(side:'BUY'|'SELL'='BUY',quantity=5,type:'MARKET'|'LIMIT'|'STOP_LOSS'='MARKET'){return {symbol:'RELIANCE',side,quantity,type,idempotencyKey:randomUUID(),...(type!=='MARKET'?{triggerPrice:'280000'}:{})};}
@@ -41,6 +43,27 @@ describe.skipIf(!enabled)('PostgreSQL trading and isolation',()=>{
   const o=await placeOrder(userId,input('BUY',5,'STOP_LOSS'));await expect(cancelOrder(otherId,o.id)).rejects.toThrow('Order not found');expect((await portfolio(otherId)).holdings).toHaveLength(0);expect((await portfolio(otherId)).cash).toBe(100000000n);
  });
  it('rejects malformed quantities on the server',async()=>{await expect(placeOrder(userId,{...input(),quantity:1.5})).rejects.toThrow();await expect(placeOrder(userId,{...input(),quantity:-1})).rejects.toThrow();});
+ it('re-seeds only the demo password and preserves account history',async()=>{
+  const email=`${randomUUID()}@demo.test`,oldPassword='OldPassword!2026',newPassword='NewPassword!2026';
+  const account=await db.account.create({data:{user:{create:{email,name:'Existing Demo',passwordHash:await hash(oldPassword,12)}},cash:7654321n,ledger:{create:{kind:'INITIAL_CREDIT',delta:100000000n,balanceAfter:100000000n}},positions:{create:{symbol:'RELIANCE',quantity:3,costBasis:855000n}}},include:{user:true}});
+  await db.order.create({data:{userId:account.user.id,symbol:'RELIANCE',side:'BUY',type:'MARKET',quantity:3,status:'FILLED',idempotencyKey:randomUUID(),fingerprint:'preserved-history'}});
+  const config:NodeJS.ProcessEnv={...process.env,NODE_ENV:'test',ENABLE_DEMO_SEED:'true',DEMO_EMAIL:email,DEMO_PASSWORD:newPassword};
+  const initialHistory=await db.priceHistory.count();
+  await seedDemo(db,config);
+  let seeded=await db.user.findUniqueOrThrow({where:{email},include:{account:{include:{ledger:true,positions:true}}}});
+  expect(await compare(newPassword,seeded.passwordHash)).toBe(true);
+  expect(await compare(oldPassword,seeded.passwordHash)).toBe(false);
+  expect(seeded.account?.cash).toBe(7654321n);expect(seeded.account?.ledger).toHaveLength(1);expect(seeded.account?.positions[0].quantity).toBe(3);
+  expect(await db.order.count({where:{userId:account.user.id}})).toBe(1);
+  const firstHash=seeded.passwordHash;
+  await seedDemo(db,config);
+  seeded=await db.user.findUniqueOrThrow({where:{email},include:{account:{include:{ledger:true,positions:true}}}});
+  expect(await compare(newPassword,seeded.passwordHash)).toBe(true);expect(seeded.passwordHash).not.toBe(firstHash);
+  expect(seeded.account?.cash).toBe(7654321n);expect(seeded.account?.ledger).toHaveLength(1);expect(seeded.account?.positions[0].quantity).toBe(3);
+  expect(await db.order.count({where:{userId:account.user.id}})).toBe(1);
+  expect(await db.priceHistory.count()).toBe(initialHistory);
+  await db.user.delete({where:{id:account.user.id}});
+ });
 });
 // Keep type checking the independent client constructor used by test tooling.
 void PrismaClient;

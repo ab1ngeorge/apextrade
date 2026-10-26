@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { ApiError, currentUser, createSession, logout, rateLimit } from '@/lib/auth';
 import { orderSchema, placeOrder, cancelOrder, portfolio } from '@/lib/trading';
 import { SIM_TIME } from '@/lib/market';
+import { isAllowedRequestOrigin } from '@/lib/origin';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>new NextResponse(JSON.stringify({data},(_,v)=>typeof v==='bigint'?v.toString():v),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
@@ -13,8 +14,7 @@ async function route(req:NextRequest,ctx:{params:Promise<{path:string[]}>}) {
  try {
   const path=(await ctx.params).path, method=req.method, p=path.join('/'), q=req.nextUrl.searchParams;
   if(method!=='GET') {
-   const origin=req.headers.get('origin');
-   if(!origin || origin!==(process.env.APP_ORIGIN??'http://localhost:3000'))throw new ApiError(403,'ORIGIN_REJECTED','Request origin is not allowed');
+   if(!isAllowedRequestOrigin(req.headers.get('origin'),process.env))throw new ApiError(403,'ORIGIN_REJECTED','Request origin is not allowed');
    if(Number(req.headers.get('content-length')??0)>20000)throw new ApiError(413,'BODY_TOO_LARGE','Request body too large');
   }
   if(p==='auth/login'||p==='auth/register') {

@@ -38,3 +38,20 @@ test('auth errors, structured rejections, pending cancellation, ownership and id
  expect((await send({...base,quantity:1.5,idempotencyKey:crypto.randomUUID()})).status()).toBe(400);
  expect((await page.request.post('/api/orders',{headers:{origin:'https://other.test'},data:v})).status()).toBe(403);
 });
+
+test('login API normalizes email, rejects invalid credentials and origins, and creates a session',async({browser})=>{
+ const origin={origin:'http://localhost:3000'};
+ const isolated=await browser.newContext();
+ expect((await isolated.request.get('http://localhost:3000/api/profile')).status()).toBe(401);
+ const email=process.env.DEMO_EMAIL!;
+ const password=process.env.DEMO_PASSWORD!;
+ expect((await isolated.request.post('http://localhost:3000/api/auth/login',{headers:origin,data:{email,password:'WrongPassword!2026'}})).status()).toBe(401);
+ expect((await isolated.request.post('http://localhost:3000/api/auth/login',{headers:origin,data:{email:'missing-'+crypto.randomUUID()+'@apextrade.test',password}})).status()).toBe(401);
+ expect((await isolated.request.post('http://localhost:3000/api/auth/login',{headers:{origin:'https://other.test'},data:{email,password}})).status()).toBe(403);
+ const response=await isolated.request.post('http://localhost:3000/api/auth/login',{headers:origin,data:{email:email.toUpperCase(),password}});
+ expect(response.status()).toBe(200);
+ const cookie=response.headers()['set-cookie']??'';
+ expect(cookie).toMatch(/apex_session=/);expect(cookie).toMatch(/HttpOnly/i);expect(cookie).toMatch(/SameSite=Lax/i);expect(cookie).toMatch(/Path=\//i);expect(cookie).toMatch(/Max-Age=604800/i);
+ expect((await isolated.request.get('http://localhost:3000/api/profile')).status()).toBe(200);
+ await isolated.close();
+});
