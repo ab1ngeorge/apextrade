@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-apex_local_only}
+      POSTGRES_DB: apextrade
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - apex-data:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/test.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex -d apextrade"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgresql://apex:${POSTGRES_PASSWORD:-apex_local_only}@db:5432/apextrade?schema=public
+      APP_ORIGIN: http://localhost:3000
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run db:migrate && npm start"]
+volumes:
+  apex-data:

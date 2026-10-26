@@ -1,0 +1,40 @@
+import { test,expect,type Page } from '@playwright/test';
+async function login(page:Page){await page.goto('/');await page.getByLabel('Email',{exact:true}).fill(process.env.DEMO_EMAIL!);await page.getByLabel('Password',{exact:true}).fill(process.env.DEMO_PASSWORD!);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('heading',{name:'Market overview'})).toBeVisible();}
+test('demo login, research, buy, verify, persistence, partial sale and export',async({page})=>{
+ await login(page);
+ await expect(page.getByTestId('available-cash')).toContainText('10,00,000.00');
+ await page.getByTestId('stock-search').fill('RELIANCE');await page.getByTestId('stock-row-RELIANCE').getByRole('link',{name:'RELIANCE',exact:true}).click();
+ await expect(page.getByRole('heading',{name:/RELIANCE/})).toBeVisible();await expect(page.getByLabel('Interactive simulated candlestick and volume chart')).toBeVisible();await expect(page.locator('canvas').first()).toBeVisible();
+ await page.getByRole('button',{name:'Compare with TCS'}).click();await expect(page.getByRole('cell',{name:'0.55',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'☆ Add to watchlist'}).click();await expect(page.getByRole('status').filter({hasText:'RELIANCE added'})).toBeVisible();
+ await page.getByTestId('buy-button').click();await page.getByTestId('order-quantity').fill('5');await page.getByRole('button',{name:'Review order',exact:true}).click();await expect(page.getByRole('heading',{name:'Review order before confirming'})).toBeVisible();await page.getByTestId('confirm-order').click();
+ await expect(page.getByTestId('order-status')).toHaveText('FILLED');const id=await page.getByTestId('order-id').innerText();expect(id.length).toBeGreaterThan(10);await expect(page.getByRole('dialog')).toContainText('Execution price: ₹2,850.00');await expect(page.getByRole('dialog')).toContainText('Simulated fee: ₹14.25');
+ await page.getByRole('button',{name:'View order history'}).click();const order=page.getByRole('row').filter({hasText:id});await expect(order).toContainText('RELIANCE');await expect(order).toContainText('FILLED');await expect(order).toContainText('2,850.00');
+ await page.getByRole('link',{name:/Portfolio/}).click();const row=page.getByTestId('holdings-table').getByRole('row').filter({hasText:'RELIANCE'});await expect(row.getByRole('cell').nth(1)).toHaveText('5');await expect(row.getByRole('cell').nth(2)).toHaveText('₹2,850.00');await expect(page.getByTestId('available-cash')).toHaveText('₹9,85,735.75');await expect(page.getByTestId('portfolio-value')).toHaveText('₹9,99,985.75');await expect(page.getByTestId('reconciliation-status')).toContainText('Cash matches ledger');
+ const p=await (await page.request.get('/api/portfolio')).json();expect(BigInt(p.data.equity)).toBe(BigInt(p.data.cash)+BigInt(p.data.marketValue));expect(p.data.ledgerCash).toBe(p.data.cash);
+ await page.reload();await expect(page.getByTestId('available-cash')).toHaveText('₹9,85,735.75');await expect(row.getByRole('cell').nth(1)).toHaveText('5');
+ await row.getByRole('button',{name:'Sell',exact:true}).click();await page.getByTestId('order-quantity').fill('2');await page.getByRole('button',{name:'Review order',exact:true}).click();await page.getByTestId('confirm-order').click();await expect(page.getByTestId('order-status')).toHaveText('FILLED');await page.getByRole('button',{name:'Verify portfolio'}).click();await expect(row.getByRole('cell').nth(1)).toHaveText('3');await expect(page.getByText('Gross realized P&L: ₹0.00')).toBeVisible();
+ await page.getByRole('link',{name:/Watchlists/}).click();await expect(page.getByTestId('stock-row-RELIANCE')).toBeVisible();
+ await page.getByRole('link',{name:/Orders & trades/}).click();await page.getByLabel('Status',{exact:true}).selectOption('FILLED');await page.getByLabel('Order symbol search').fill('RELIANCE');
+ const downloadPromise=page.waitForEvent('download');await page.getByRole('link',{name:'Export filled trades CSV'}).click();expect((await downloadPromise).suggestedFilename()).toBe('apextrade-trades.csv');
+ const csv=await page.request.get('/api/trades?format=csv');expect(await csv.text()).toContain(id);expect(await csv.text()).toContain('1425');
+ await page.getByRole('button',{name:'Log out',exact:true}).click();await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeVisible();await login(page);await page.getByRole('link',{name:/Portfolio/}).click();await expect(row.getByRole('cell').nth(1)).toHaveText('3');
+});
+test('auth errors, structured rejections, pending cancellation, ownership and idempotency',async({page,browser})=>{
+ await page.goto('/');await page.getByLabel('Email',{exact:true}).fill(process.env.DEMO_EMAIL!);await page.getByLabel('Password',{exact:true}).fill('WrongPassword2026!');await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('alert')).toHaveText('Invalid email or password');await login(page);
+ const headers={origin:'http://localhost:3000'};
+ const baseline=(await (await page.request.get('/api/portfolio')).json()).data;
+ const send=(data:unknown)=>page.request.post('/api/orders',{headers,data});
+ const base={symbol:'RELIANCE',side:'BUY',type:'MARKET',quantity:1000000,idempotencyKey:crypto.randomUUID()};
+ let r=await send(base);expect(r.status()).toBe(422);expect((await r.json()).data.reason).toBe('INSUFFICIENT_FUNDS');
+ r=await send({...base,side:'SELL',idempotencyKey:crypto.randomUUID()});expect(r.status()).toBe(422);expect((await r.json()).data.reason).toBe('INSUFFICIENT_HOLDINGS');
+ r=await send({...base,quantity:1,type:'LIMIT',triggerPrice:'280000',idempotencyKey:crypto.randomUUID()});const pending=(await r.json()).data;expect(pending.status).toBe('PENDING');
+ const second=await browser.newContext();const stranger=await second.newPage();await stranger.goto('/');await stranger.getByRole('button',{name:'New here? Create an account'}).click();await stranger.getByLabel('Name',{exact:true}).fill('Second User');await stranger.getByLabel('Email',{exact:true}).fill(crypto.randomUUID()+'@apextrade.test');await stranger.getByLabel('Password',{exact:true}).fill('IsolatedTest!2026');await stranger.getByRole('button',{name:'Create account',exact:true}).click();await expect(stranger.getByRole('heading',{name:'Market overview'})).toBeVisible();
+ expect((await second.request.post('/api/orders/'+pending.id+'/cancel',{headers,data:{}})).status()).toBe(404);expect((await (await second.request.get('/api/orders')).json()).data).toHaveLength(0);
+ const watches=(await (await page.request.get('/api/watchlists')).json()).data;expect((await second.request.patch('/api/watchlists/'+watches[0].id,{headers,data:{name:'Hacked'}})).status()).toBe(404);
+ await second.close();r=await page.request.post('/api/orders/'+pending.id+'/cancel',{headers,data:{}});expect((await r.json()).data.status).toBe('CANCELLED');
+ const after=(await (await page.request.get('/api/portfolio')).json()).data;expect(after.cash).toBe(baseline.cash);expect(after.reconciled).toBe(true);
+ const v={...base,quantity:1,idempotencyKey:crypto.randomUUID()};const [a,b]=await Promise.all([send(v),send(v)]);expect((await a.json()).data.id).toBe((await b.json()).data.id);
+ expect((await send({...base,quantity:1.5,idempotencyKey:crypto.randomUUID()})).status()).toBe(400);
+ expect((await page.request.post('/api/orders',{headers:{origin:'https://other.test'},data:v})).status()).toBe(403);
+});

@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model User {
+  id String @id @default(cuid())
+  email String @unique
+  name String
+  passwordHash String
+  createdAt DateTime @default(now())
+  sessions Session[]
+  account Account?
+  watchlists Watchlist[]
+  orders Order[]
+  notifications Notification[]
+  alerts PriceAlert[]
+}
+model Session {
+  id String @id
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([expiresAt])
+}
+model Account {
+  id String @id @default(cuid())
+  userId String @unique
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  cash BigInt @default(100000000)
+  positions Position[]
+  ledger CashLedger[]
+}
+model Instrument {
+  symbol String @id
+  name String
+  exchange String
+  sector String
+  price BigInt
+  previousClose BigInt
+  metrics Json
+  history PriceHistory[]
+  positions Position[]
+  orders Order[]
+  watchItems WatchlistItem[]
+  alerts PriceAlert[]
+  @@index([exchange,sector])
+}
+model PriceHistory {
+  id String @id @default(cuid())
+  symbol String
+  instrument Instrument @relation(fields:[symbol], references:[symbol], onDelete:Cascade)
+  time DateTime
+  open BigInt
+  high BigInt
+  low BigInt
+  close BigInt
+  volume Int
+  @@unique([symbol,time])
+}
+model Watchlist {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  name String
+  items WatchlistItem[]
+  @@unique([userId,name])
+}
+model WatchlistItem {
+  id String @id @default(cuid())
+  watchlistId String
+  watchlist Watchlist @relation(fields:[watchlistId], references:[id], onDelete:Cascade)
+  symbol String
+  instrument Instrument @relation(fields:[symbol], references:[symbol])
+  @@unique([watchlistId,symbol])
+}
+model Order {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId], references:[id])
+  symbol String
+  instrument Instrument @relation(fields:[symbol], references:[symbol])
+  side String
+  type String
+  quantity Int
+  triggerPrice BigInt?
+  status String
+  reason String?
+  idempotencyKey String
+  fingerprint String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  execution Execution?
+  @@unique([userId,idempotencyKey])
+  @@index([userId,createdAt])
+  @@index([userId,status])
+}
+model Execution {
+  id String @id @default(cuid())
+  orderId String @unique
+  order Order @relation(fields:[orderId], references:[id])
+  price BigInt
+  quantity Int
+  notional BigInt
+  fee BigInt
+  createdAt DateTime @default(now())
+  trade Trade?
+  ledger CashLedger?
+}
+model Position {
+  id String @id @default(cuid())
+  accountId String
+  account Account @relation(fields:[accountId], references:[id])
+  symbol String
+  instrument Instrument @relation(fields:[symbol], references:[symbol])
+  quantity Int
+  costBasis BigInt
+  realizedGross BigInt @default(0)
+  fees BigInt @default(0)
+  @@unique([accountId,symbol])
+}
+model CashLedger {
+  id String @id @default(cuid())
+  accountId String
+  account Account @relation(fields:[accountId], references:[id])
+  executionId String? @unique
+  execution Execution? @relation(fields:[executionId], references:[id])
+  kind String
+  delta BigInt
+  balanceAfter BigInt
+  createdAt DateTime @default(now())
+  @@index([accountId,createdAt])
+}
+model Trade {
+  id String @id @default(cuid())
+  executionId String @unique
+  execution Execution @relation(fields:[executionId], references:[id])
+  realizedGross BigInt
+  removedBasis BigInt
+}
+model Notification {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  message String
+  read Boolean @default(false)
+  createdAt DateTime @default(now())
+  @@index([userId,createdAt])
+}
+model PriceAlert {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  symbol String
+  instrument Instrument @relation(fields:[symbol], references:[symbol])
+  target BigInt
+  direction String
+  createdAt DateTime @default(now())
+  @@index([userId])
+}
+model RateLimit {
+  key String @id
+  count Int
+  resetAt DateTime
+}
